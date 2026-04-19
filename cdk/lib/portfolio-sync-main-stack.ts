@@ -86,12 +86,16 @@ export class PortfolioSyncMainStack extends cdk.Stack {
 
     // --- DynamoDB: Portfolio (holdings) table ---
     const portfolioTable = new dynamodb.Table(this, "PortfolioTable", {
-      tableName: `portfolio-holdings-${props.envName}`,
+      tableName: `portfolio-holdings-v2-${props.envName}`,
       partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
-      sortKey: { name: "symbol", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "stock_name", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecovery: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    portfolioTable.addGlobalSecondaryIndex({
+      indexName: "symbol-index",
+      partitionKey: { name: "symbol", type: dynamodb.AttributeType.STRING },
     });
 
     // --- DynamoDB: Uploads table ---
