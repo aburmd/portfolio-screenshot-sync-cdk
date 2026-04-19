@@ -5,6 +5,7 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as iam from "aws-cdk-lib/aws-iam";
 import { Construct } from "constructs";
 
 interface PortfolioSyncMainStackProps extends cdk.StackProps {
@@ -71,6 +72,14 @@ export class PortfolioSyncMainStack extends cdk.Stack {
       sortKey: { name: "created_at", type: dynamodb.AttributeType.STRING },
     });
 
+    // --- DynamoDB: Symbol map table (admin-managed lookup) ---
+    const symbolMapTable = new dynamodb.Table(this, "SymbolMapTable", {
+      tableName: `portfolio-symbol-map-${props.envName}`,
+      partitionKey: { name: "stock_name", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
     // --- SQS: Dead letter queue ---
     const dlq = new sqs.Queue(this, "OcrDLQ", {
       queueName: `portfolio-ocr-dlq-${props.envName}`,
@@ -103,6 +112,7 @@ export class PortfolioSyncMainStack extends cdk.Stack {
         PORTFOLIO_TABLE: portfolioTable.tableName,
         UPLOADS_TABLE: uploadsTable.tableName,
         USERS_TABLE: usersTable.tableName,
+        SYMBOL_MAP_TABLE: symbolMapTable.tableName,
         ENV: props.envName,
       },
     });
@@ -111,6 +121,13 @@ export class PortfolioSyncMainStack extends cdk.Stack {
     screenshotsBucket.grantRead(ocrLambda);
     portfolioTable.grantReadWriteData(ocrLambda);
     uploadsTable.grantReadWriteData(ocrLambda);
+    symbolMapTable.grantReadData(ocrLambda);
+    ocrLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["textract:DetectDocumentText"],
+        resources: ["*"],
+      })
+    );
 
     // --- S3 event trigger: uploads/ prefix → Lambda ---
     screenshotsBucket.addEventNotification(
@@ -131,6 +148,9 @@ export class PortfolioSyncMainStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, "UsersTableName", {
       value: usersTable.tableName,
+    });
+    new cdk.CfnOutput(this, "SymbolMapTableName", {
+      value: symbolMapTable.tableName,
     });
     new cdk.CfnOutput(this, "UploadsTableName", {
       value: uploadsTable.tableName,
