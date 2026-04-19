@@ -13,6 +13,7 @@ interface PortfolioSyncMainStackProps extends cdk.StackProps {
   envName: string;
   artifactBucket: s3.IBucket;
   lambdaArtifactKey: string;
+  adminEmail: string;
 }
 
 export class PortfolioSyncMainStack extends cdk.Stack {
@@ -23,7 +24,8 @@ export class PortfolioSyncMainStack extends cdk.Stack {
   ) {
     super(scope, id, props);
 
-    // --- Cognito: User Pool ---
+    // ==================== COGNITO ====================
+
     const userPool = new cognito.UserPool(this, "UserPool", {
       userPoolName: `portfolio-sync-users-${props.envName}`,
       selfSignUpEnabled: true,
@@ -35,19 +37,85 @@ export class PortfolioSyncMainStack extends cdk.Stack {
         requireDigits: true,
         requireSymbols: false,
       },
+      customAttributes: {
+        role: new cognito.StringAttribute({ mutable: true, minLen: 1, maxLen: 20 }),
+      },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
+
+    // Admin group
+    new cognito.CfnUserPoolGroup(this, "AdminGroup", {
+      userPoolId: userPool.userPoolId,
+      groupName: "admin",
+      description: "Administrators with access to symbol management",
+    });
+
+    // Post-confirmation Lambda: auto-assign custom:role based on email
+    const postConfirmLambda = new lambda.Function(this, "PostConfirmLambda", {
+      functionName: `portfolio-post-confirm-${props.envName}`,
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: "index.handler",
+      code: lambda.Code.fromInline(`
+import boto3
+import os
+
+cognito_client = boto3.client("cognito-idp")
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "")
+
+def handler(event, context):
+    email = event["request"]["userAttributes"].get("email", "")
+    username = event["userName"]
+    pool_id = event["userPoolId"]
+    role = "admin" if email.lower() == ADMIN_EMAIL.lower() else "user"
+
+    cognito_client.admin_update_user_attributes(
+        UserPoolId=pool_id,
+        Username=username,
+        UserAttributes=[{"Name": "custom:role", "Value": role}],
+    )
+
+    if role == "admin":
+        cognito_client.admin_add_user_to_group(
+            UserPoolId=pool_id,
+            Username=username,
+            GroupName="admin",
+        )
+
+    return event
+`),
+      environment: {
+        ADMIN_EMAIL: props.adminEmail,
+      },
+      timeout: cdk.Duration.seconds(10),
+    });
+
+    postConfirmLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "cognito-idp:AdminUpdateUserAttributes",
+          "cognito-idp:AdminAddUserToGroup",
+        ],
+        resources: ["*"],
+      })
+    );
+
+    userPool.addTrigger(
+      cognito.UserPoolOperation.POST_CONFIRMATION,
+      postConfirmLambda
+    );
 
     const userPoolClient = userPool.addClient("WebClient", {
       userPoolClientName: `portfolio-sync-web-${props.envName}`,
-      authFlows: {
-        userPassword: true,
-        userSrp: true,
-      },
+      authFlows: { userPassword: true, userSrp: true },
+      readAttributes: new cognito.ClientAttributes().withCustomAttributes("role"),
       oAuth: {
         flows: { authorizationCodeGrant: true, implicitCodeGrant: true },
-        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
+        scopes: [
+          cognito.OAuthScope.OPENID,
+          cognito.OAuthScope.EMAIL,
+          cognito.OAuthScope.PROFILE,
+        ],
         callbackUrls: ["http://localhost:3000/callback"],
         logoutUrls: ["http://localhost:3000/"],
       },
@@ -57,11 +125,13 @@ export class PortfolioSyncMainStack extends cdk.Stack {
       cognitoDomain: { domainPrefix: `portfolio-sync-${props.envName}` },
     });
 
-    // --- S3: Screenshots bucket (uploads only) ---
+    // ==================== S3 ====================
+
     const screenshotsBucket = new s3.Bucket(this, "ScreenshotsBucket", {
       bucketName: `portfolio-screenshots-${props.envName}`,
       encryption: s3.BucketEncryption.S3_MANAGED,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
       cors: [
         {
           allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.POST],
@@ -71,39 +141,41 @@ export class PortfolioSyncMainStack extends cdk.Stack {
       ],
     });
 
-    // --- DynamoDB: Users table ---
+    // ==================== DYNAMODB ====================
+
     const usersTable = new dynamodb.Table(this, "UsersTable", {
       tableName: `portfolio-users-${props.envName}`,
       partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecovery: true,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
     usersTable.addGlobalSecondaryIndex({
       indexName: "email-index",
       partitionKey: { name: "email", type: dynamodb.AttributeType.STRING },
     });
 
-    // --- DynamoDB: Portfolio (holdings) table ---
     const portfolioTable = new dynamodb.Table(this, "PortfolioTable", {
-      tableName: `portfolio-holdings-v2-${props.envName}`,
+      tableName: `portfolio-holdings-${props.envName}`,
       partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "stock_name", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecovery: true,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
     portfolioTable.addGlobalSecondaryIndex({
       indexName: "symbol-index",
       partitionKey: { name: "symbol", type: dynamodb.AttributeType.STRING },
     });
 
-    // --- DynamoDB: Uploads table ---
     const uploadsTable = new dynamodb.Table(this, "UploadsTable", {
       tableName: `portfolio-uploads-${props.envName}`,
-      partitionKey: { name: "upload_id", type: dynamodb.AttributeType.STRING },
+      partitionKey: {
+        name: "upload_id",
+        type: dynamodb.AttributeType.STRING,
+      },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
     uploadsTable.addGlobalSecondaryIndex({
       indexName: "user-index",
@@ -111,28 +183,31 @@ export class PortfolioSyncMainStack extends cdk.Stack {
       sortKey: { name: "created_at", type: dynamodb.AttributeType.STRING },
     });
 
-    // --- DynamoDB: Symbol map table (admin-managed lookup) ---
     const symbolMapTable = new dynamodb.Table(this, "SymbolMapTable", {
       tableName: `portfolio-symbol-map-${props.envName}`,
-      partitionKey: { name: "stock_name", type: dynamodb.AttributeType.STRING },
+      partitionKey: {
+        name: "stock_name",
+        type: dynamodb.AttributeType.STRING,
+      },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // --- SQS: Dead letter queue ---
+    // ==================== SQS + CLOUDWATCH ====================
+
     const dlq = new sqs.Queue(this, "OcrDLQ", {
       queueName: `portfolio-ocr-dlq-${props.envName}`,
       retentionPeriod: cdk.Duration.days(14),
     });
 
-    // --- CloudWatch: Log group ---
     const logGroup = new logs.LogGroup(this, "OcrLogGroup", {
       logGroupName: `/aws/lambda/portfolio-ocr-${props.envName}`,
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // --- Lambda: OCR processor ---
+    // ==================== LAMBDA: OCR ====================
+
     const ocrLambda = new lambda.Function(this, "OcrLambda", {
       functionName: `portfolio-ocr-${props.envName}`,
       runtime: lambda.Runtime.PYTHON_3_12,
@@ -140,7 +215,7 @@ export class PortfolioSyncMainStack extends cdk.Stack {
       code: props.lambdaArtifactKey
         ? lambda.Code.fromBucket(props.artifactBucket, props.lambdaArtifactKey)
         : lambda.Code.fromInline(
-            'def lambda_handler(event, context): return {"statusCode": 200, "body": "placeholder"}'
+            'def lambda_handler(event, context): return {"statusCode": 200}'
           ),
       memorySize: 512,
       timeout: cdk.Duration.seconds(60),
@@ -156,7 +231,6 @@ export class PortfolioSyncMainStack extends cdk.Stack {
       },
     });
 
-    // --- IAM: Grant permissions ---
     screenshotsBucket.grantRead(ocrLambda);
     portfolioTable.grantReadWriteData(ocrLambda);
     uploadsTable.grantReadWriteData(ocrLambda);
@@ -168,14 +242,14 @@ export class PortfolioSyncMainStack extends cdk.Stack {
       })
     );
 
-    // --- S3 event trigger: uploads/ prefix → Lambda ---
     screenshotsBucket.addEventNotification(
       s3.EventType.OBJECT_CREATED,
       new s3n.LambdaDestination(ocrLambda),
       { prefix: "uploads/" }
     );
 
-    // --- Outputs ---
+    // ==================== OUTPUTS ====================
+
     new cdk.CfnOutput(this, "CognitoUserPoolId", {
       value: userPool.userPoolId,
     });

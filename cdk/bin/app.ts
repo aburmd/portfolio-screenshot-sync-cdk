@@ -19,4 +19,5 @@ new PortfolioSyncMainStack(app, `PortfolioSyncMainStack-${env}`, {
   envName: env,
   artifactBucket: artifactStack.bucket,
   lambdaArtifactKey: app.node.tryGetContext("lambdaArtifactKey") || "",
+  adminEmail: app.node.tryGetContext("adminEmail") || "aburmd@gmail.com",
 });
