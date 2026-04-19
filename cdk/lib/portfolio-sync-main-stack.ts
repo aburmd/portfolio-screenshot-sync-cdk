@@ -193,6 +193,26 @@ def handler(event, context):
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    // Shares table: tracks dashboard sharing between users
+    // PK=owner_id, SK=viewer_id
+    // status: pending_admin | pending_viewer | approved | rejected
+    const sharesTable = new dynamodb.Table(this, "SharesTable", {
+      tableName: `portfolio-shares-${props.envName}`,
+      partitionKey: { name: "owner_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "viewer_id", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    sharesTable.addGlobalSecondaryIndex({
+      indexName: "viewer-index",
+      partitionKey: { name: "viewer_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "status", type: dynamodb.AttributeType.STRING },
+    });
+    sharesTable.addGlobalSecondaryIndex({
+      indexName: "status-index",
+      partitionKey: { name: "status", type: dynamodb.AttributeType.STRING },
+    });
+
     // ==================== SQS + CLOUDWATCH ====================
 
     const dlq = new sqs.Queue(this, "OcrDLQ", {
@@ -273,6 +293,9 @@ def handler(event, context):
     });
     new cdk.CfnOutput(this, "SymbolMapTableName", {
       value: symbolMapTable.tableName,
+    });
+    new cdk.CfnOutput(this, "SharesTableName", {
+      value: sharesTable.tableName,
     });
     new cdk.CfnOutput(this, "UploadsTableName", {
       value: uploadsTable.tableName,
