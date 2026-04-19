@@ -5,6 +5,7 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { Construct } from "constructs";
 
@@ -21,6 +22,40 @@ export class PortfolioSyncMainStack extends cdk.Stack {
     props: PortfolioSyncMainStackProps
   ) {
     super(scope, id, props);
+
+    // --- Cognito: User Pool ---
+    const userPool = new cognito.UserPool(this, "UserPool", {
+      userPoolName: `portfolio-sync-users-${props.envName}`,
+      selfSignUpEnabled: true,
+      signInAliases: { email: true },
+      autoVerify: { email: true },
+      passwordPolicy: {
+        minLength: 8,
+        requireUppercase: false,
+        requireDigits: true,
+        requireSymbols: false,
+      },
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    const userPoolClient = userPool.addClient("WebClient", {
+      userPoolClientName: `portfolio-sync-web-${props.envName}`,
+      authFlows: {
+        userPassword: true,
+        userSrp: true,
+      },
+      oAuth: {
+        flows: { authorizationCodeGrant: true, implicitCodeGrant: true },
+        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
+        callbackUrls: ["http://localhost:3000/callback"],
+        logoutUrls: ["http://localhost:3000/"],
+      },
+    });
+
+    userPool.addDomain("CognitoDomain", {
+      cognitoDomain: { domainPrefix: `portfolio-sync-${props.envName}` },
+    });
 
     // --- S3: Screenshots bucket (uploads only) ---
     const screenshotsBucket = new s3.Bucket(this, "ScreenshotsBucket", {
@@ -137,6 +172,15 @@ export class PortfolioSyncMainStack extends cdk.Stack {
     );
 
     // --- Outputs ---
+    new cdk.CfnOutput(this, "CognitoUserPoolId", {
+      value: userPool.userPoolId,
+    });
+    new cdk.CfnOutput(this, "CognitoClientId", {
+      value: userPoolClient.userPoolClientId,
+    });
+    new cdk.CfnOutput(this, "CognitoDomain", {
+      value: `portfolio-sync-${props.envName}.auth.${this.region}.amazoncognito.com`,
+    });
     new cdk.CfnOutput(this, "ScreenshotsBucketName", {
       value: screenshotsBucket.bucketName,
     });
