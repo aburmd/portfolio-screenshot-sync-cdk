@@ -7,12 +7,18 @@ import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
+import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
+import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
+import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
+import * as apigwv2int from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import { Construct } from "constructs";
 
 interface PortfolioSyncMainStackProps extends cdk.StackProps {
   envName: string;
   artifactBucket: s3.IBucket;
   lambdaArtifactKey: string;
+  backendArtifactKey: string;
   adminEmail: string;
 }
 
@@ -268,6 +274,117 @@ def handler(event, context):
       { prefix: "uploads/" }
     );
 
+    // ==================== LAMBDA: BACKEND API ====================
+
+    const apiLogGroup = new logs.LogGroup(this, "ApiLogGroup", {
+      logGroupName: `/aws/lambda/portfolio-api-${props.envName}`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    const apiLambda = new lambda.Function(this, "ApiLambda", {
+      functionName: `portfolio-api-${props.envName}`,
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: "app.handler",
+      code: props.backendArtifactKey
+        ? lambda.Code.fromBucket(props.artifactBucket, props.backendArtifactKey)
+        : lambda.Code.fromInline(
+            'def handler(event, context): return {"statusCode": 200, "body": "placeholder"}'
+          ),
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(30),
+      logGroup: apiLogGroup,
+      environment: {
+        SCREENSHOTS_BUCKET: screenshotsBucket.bucketName,
+        PORTFOLIO_TABLE: portfolioTable.tableName,
+        UPLOADS_TABLE: uploadsTable.tableName,
+        USERS_TABLE: usersTable.tableName,
+        SYMBOL_MAP_TABLE: symbolMapTable.tableName,
+        SHARES_TABLE: sharesTable.tableName,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        ENV: props.envName,
+      },
+    });
+
+    screenshotsBucket.grantReadWrite(apiLambda);
+    portfolioTable.grantReadWriteData(apiLambda);
+    uploadsTable.grantReadWriteData(apiLambda);
+    symbolMapTable.grantReadWriteData(apiLambda);
+    sharesTable.grantReadWriteData(apiLambda);
+    apiLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "cognito-idp:ListUsers",
+          "cognito-idp:AdminGetUser",
+          "cognito-idp:AdminUpdateUserAttributes",
+          "cognito-idp:AdminAddUserToGroup",
+          "cognito-idp:AdminRemoveUserFromGroup",
+        ],
+        resources: ["*"],
+      })
+    );
+
+    // ==================== API GATEWAY ====================
+
+    const httpApi = new apigwv2.HttpApi(this, "HttpApi", {
+      apiName: `portfolio-api-${props.envName}`,
+      corsPreflight: {
+        allowOrigins: ["*"],
+        allowMethods: [
+          apigwv2.CorsHttpMethod.GET,
+          apigwv2.CorsHttpMethod.POST,
+          apigwv2.CorsHttpMethod.PUT,
+          apigwv2.CorsHttpMethod.DELETE,
+          apigwv2.CorsHttpMethod.OPTIONS,
+        ],
+        allowHeaders: ["*"],
+      },
+    });
+
+    httpApi.addRoutes({
+      path: "/{proxy+}",
+      methods: [
+        apigwv2.HttpMethod.GET,
+        apigwv2.HttpMethod.POST,
+        apigwv2.HttpMethod.PUT,
+        apigwv2.HttpMethod.DELETE,
+      ],
+      integration: new apigwv2int.HttpLambdaIntegration(
+        "ApiIntegration",
+        apiLambda
+      ),
+    });
+
+    // ==================== FRONTEND: S3 + CLOUDFRONT ====================
+
+    const frontendBucket = new s3.Bucket(this, "FrontendBucket", {
+      bucketName: `portfolio-sync-web-654654547262-${props.envName}`,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+    });
+
+    const distribution = new cloudfront.Distribution(this, "Distribution", {
+      defaultBehavior: {
+        origin: origins.S3BucketOrigin.withOriginAccessControl(frontendBucket),
+        viewerProtocolPolicy:
+          cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      },
+      defaultRootObject: "index.html",
+      errorResponses: [
+        {
+          httpStatus: 403,
+          responseHttpStatus: 200,
+          responsePagePath: "/index.html",
+        },
+        {
+          httpStatus: 404,
+          responseHttpStatus: 200,
+          responsePagePath: "/index.html",
+        },
+      ],
+    });
+
     // ==================== OUTPUTS ====================
 
     new cdk.CfnOutput(this, "CognitoUserPoolId", {
@@ -299,6 +416,18 @@ def handler(event, context):
     });
     new cdk.CfnOutput(this, "UploadsTableName", {
       value: uploadsTable.tableName,
+    });
+    new cdk.CfnOutput(this, "ApiUrl", {
+      value: httpApi.apiEndpoint,
+    });
+    new cdk.CfnOutput(this, "FrontendBucketName", {
+      value: frontendBucket.bucketName,
+    });
+    new cdk.CfnOutput(this, "CloudFrontUrl", {
+      value: `https://${distribution.distributionDomainName}`,
+    });
+    new cdk.CfnOutput(this, "CloudFrontDistributionId", {
+      value: distribution.distributionId,
     });
   }
 }
