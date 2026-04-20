@@ -219,6 +219,25 @@ def handler(event, context):
       partitionKey: { name: "status", type: dynamodb.AttributeType.STRING },
     });
 
+    // Position Tracker tables (Phase 2)
+    const snapshotsTable = new dynamodb.Table(this, "SnapshotsTable", {
+      tableName: `portfolio-snapshots-${props.envName}`,
+      partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "platform_ts", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    const transactionsTable = new dynamodb.Table(this, "TransactionsTable", {
+      tableName: `portfolio-transactions-${props.envName}`,
+      partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "platform_ts_type", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // ==================== SQS + CLOUDWATCH ====================
 
     const dlq = new sqs.Queue(this, "OcrDLQ", {
@@ -301,6 +320,8 @@ def handler(event, context):
         USERS_TABLE: usersTable.tableName,
         SYMBOL_MAP_TABLE: symbolMapTable.tableName,
         SHARES_TABLE: sharesTable.tableName,
+        SNAPSHOTS_TABLE: snapshotsTable.tableName,
+        TRANSACTIONS_TABLE: transactionsTable.tableName,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
         ENV: props.envName,
       },
@@ -311,6 +332,8 @@ def handler(event, context):
     uploadsTable.grantReadWriteData(apiLambda);
     symbolMapTable.grantReadWriteData(apiLambda);
     sharesTable.grantReadWriteData(apiLambda);
+    snapshotsTable.grantReadWriteData(apiLambda);
+    transactionsTable.grantReadWriteData(apiLambda);
     apiLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
@@ -416,6 +439,12 @@ def handler(event, context):
     });
     new cdk.CfnOutput(this, "UploadsTableName", {
       value: uploadsTable.tableName,
+    });
+    new cdk.CfnOutput(this, "SnapshotsTableName", {
+      value: snapshotsTable.tableName,
+    });
+    new cdk.CfnOutput(this, "TransactionsTableName", {
+      value: transactionsTable.tableName,
     });
     new cdk.CfnOutput(this, "ApiUrl", {
       value: httpApi.apiEndpoint,
