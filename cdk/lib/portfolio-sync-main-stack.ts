@@ -10,6 +10,8 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
+import * as events from "aws-cdk-lib/aws-events";
+import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import * as apigwv2int from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import { Construct } from "constructs";
@@ -238,6 +240,28 @@ def handler(event, context):
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    // Performance Chart tables (Phase 3)
+    const dailyPricesTable = new dynamodb.Table(this, "DailyPricesTable", {
+      tableName: `portfolio-daily-prices-${props.envName}`,
+      partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "symbol_date", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    dailyPricesTable.addGlobalSecondaryIndex({
+      indexName: "date-index",
+      partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "date", type: dynamodb.AttributeType.STRING },
+    });
+
+    const buyLotsTable = new dynamodb.Table(this, "BuyLotsTable", {
+      tableName: `portfolio-buy-lots-${props.envName}`,
+      partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "symbol_ts", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // ==================== SQS + CLOUDWATCH ====================
 
     const dlq = new sqs.Queue(this, "OcrDLQ", {
@@ -293,6 +317,43 @@ def handler(event, context):
       { prefix: "uploads/" }
     );
 
+    // ==================== LAMBDA: DAILY PRICE CAPTURE ====================
+
+    const dailyPriceLogGroup = new logs.LogGroup(this, "DailyPriceLogGroup", {
+      logGroupName: `/aws/lambda/portfolio-daily-price-${props.envName}`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    const dailyPriceLambda = new lambda.Function(this, "DailyPriceLambda", {
+      functionName: `portfolio-daily-price-${props.envName}`,
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: "daily_price.handler",
+      code: props.backendArtifactKey
+        ? lambda.Code.fromBucket(props.artifactBucket, props.backendArtifactKey)
+        : lambda.Code.fromInline(
+            'def handler(event, context): return {"statusCode": 200, "body": "placeholder"}'
+          ),
+      memorySize: 512,
+      timeout: cdk.Duration.minutes(5),
+      logGroup: dailyPriceLogGroup,
+      environment: {
+        PORTFOLIO_TABLE: portfolioTable.tableName,
+        DAILY_PRICES_TABLE: dailyPricesTable.tableName,
+        ENV: props.envName,
+      },
+    });
+
+    portfolioTable.grantReadData(dailyPriceLambda);
+    dailyPricesTable.grantReadWriteData(dailyPriceLambda);
+
+    // EventBridge: 8 PM EST Mon-Fri = 1:00 AM UTC Tue-Sat
+    new events.Rule(this, "DailyPriceSchedule", {
+      ruleName: `portfolio-daily-price-schedule-${props.envName}`,
+      schedule: events.Schedule.expression("cron(0 1 ? * TUE-SAT *)"),
+      targets: [new targets.LambdaFunction(dailyPriceLambda)],
+    });
+
     // ==================== LAMBDA: BACKEND API ====================
 
     const apiLogGroup = new logs.LogGroup(this, "ApiLogGroup", {
@@ -322,6 +383,8 @@ def handler(event, context):
         SHARES_TABLE: sharesTable.tableName,
         SNAPSHOTS_TABLE: snapshotsTable.tableName,
         TRANSACTIONS_TABLE: transactionsTable.tableName,
+        DAILY_PRICES_TABLE: dailyPricesTable.tableName,
+        BUY_LOTS_TABLE: buyLotsTable.tableName,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
         ENV: props.envName,
       },
@@ -334,6 +397,8 @@ def handler(event, context):
     sharesTable.grantReadWriteData(apiLambda);
     snapshotsTable.grantReadWriteData(apiLambda);
     transactionsTable.grantReadWriteData(apiLambda);
+    dailyPricesTable.grantReadWriteData(apiLambda);
+    buyLotsTable.grantReadWriteData(apiLambda);
     apiLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
@@ -445,6 +510,15 @@ def handler(event, context):
     });
     new cdk.CfnOutput(this, "TransactionsTableName", {
       value: transactionsTable.tableName,
+    });
+    new cdk.CfnOutput(this, "DailyPricesTableName", {
+      value: dailyPricesTable.tableName,
+    });
+    new cdk.CfnOutput(this, "BuyLotsTableName", {
+      value: buyLotsTable.tableName,
+    });
+    new cdk.CfnOutput(this, "DailyPriceLambdaName", {
+      value: dailyPriceLambda.functionName,
     });
     new cdk.CfnOutput(this, "ApiUrl", {
       value: httpApi.apiEndpoint,
