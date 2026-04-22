@@ -1,6 +1,8 @@
 {
   "app": "npx ts-node bin/app.ts",
   "context": {
-    "env": "dev"
+    "env": "dev",
+    "lambdaArtifactKey": "lambda/ocr-processor-aa69dd2.zip",
+    "backendArtifactKey": "lambda/backend-api-13b0446.zip"
   }
 }

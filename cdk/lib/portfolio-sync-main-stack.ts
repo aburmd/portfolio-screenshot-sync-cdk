@@ -276,16 +276,19 @@ def handler(event, context):
     });
 
     // ==================== LAMBDA: OCR ====================
+    // SAFETY: If no artifact key provided, keep existing Lambda code unchanged.
+    // Only update code when explicitly deploying a new artifact.
+    const ocrCode = props.lambdaArtifactKey
+      ? lambda.Code.fromBucket(props.artifactBucket, props.lambdaArtifactKey)
+      : lambda.Code.fromInline(
+          '# PLACEHOLDER - deploy with -c lambdaArtifactKey=lambda/ocr-processor-<sha>.zip to update\ndef lambda_handler(event, context): return {"statusCode": 200}'
+        );
 
     const ocrLambda = new lambda.Function(this, "OcrLambda", {
       functionName: `portfolio-ocr-${props.envName}`,
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: "handler.lambda_handler",
-      code: props.lambdaArtifactKey
-        ? lambda.Code.fromBucket(props.artifactBucket, props.lambdaArtifactKey)
-        : lambda.Code.fromInline(
-            'def lambda_handler(event, context): return {"statusCode": 200}'
-          ),
+      code: ocrCode,
       memorySize: 512,
       timeout: cdk.Duration.seconds(60),
       deadLetterQueue: dlq,
@@ -318,6 +321,12 @@ def handler(event, context):
     );
 
     // ==================== LAMBDA: DAILY PRICE CAPTURE ====================
+    // SAFETY: Same pattern — only update code when artifact key provided
+    const dailyPriceCode = props.backendArtifactKey
+      ? lambda.Code.fromBucket(props.artifactBucket, props.backendArtifactKey)
+      : lambda.Code.fromInline(
+          '# PLACEHOLDER - deploy with -c backendArtifactKey=lambda/backend-api-<sha>.zip to update\ndef handler(event, context): return {"statusCode": 200, "body": "placeholder"}'
+        );
 
     const dailyPriceLogGroup = new logs.LogGroup(this, "DailyPriceLogGroup", {
       logGroupName: `/aws/lambda/portfolio-daily-price-${props.envName}`,
@@ -329,11 +338,7 @@ def handler(event, context):
       functionName: `portfolio-daily-price-${props.envName}`,
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: "daily_price.handler",
-      code: props.backendArtifactKey
-        ? lambda.Code.fromBucket(props.artifactBucket, props.backendArtifactKey)
-        : lambda.Code.fromInline(
-            'def handler(event, context): return {"statusCode": 200, "body": "placeholder"}'
-          ),
+      code: dailyPriceCode,
       memorySize: 512,
       timeout: cdk.Duration.minutes(5),
       logGroup: dailyPriceLogGroup,
@@ -355,6 +360,12 @@ def handler(event, context):
     });
 
     // ==================== LAMBDA: BACKEND API ====================
+    // SAFETY: Same pattern — only update code when artifact key provided
+    const apiCode = props.backendArtifactKey
+      ? lambda.Code.fromBucket(props.artifactBucket, props.backendArtifactKey)
+      : lambda.Code.fromInline(
+          '# PLACEHOLDER - deploy with -c backendArtifactKey=lambda/backend-api-<sha>.zip to update\ndef handler(event, context): return {"statusCode": 200, "body": "placeholder"}'
+        );
 
     const apiLogGroup = new logs.LogGroup(this, "ApiLogGroup", {
       logGroupName: `/aws/lambda/portfolio-api-${props.envName}`,
@@ -366,11 +377,7 @@ def handler(event, context):
       functionName: `portfolio-api-${props.envName}`,
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: "app.handler",
-      code: props.backendArtifactKey
-        ? lambda.Code.fromBucket(props.artifactBucket, props.backendArtifactKey)
-        : lambda.Code.fromInline(
-            'def handler(event, context): return {"statusCode": 200, "body": "placeholder"}'
-          ),
+      code: apiCode,
       memorySize: 512,
       timeout: cdk.Duration.seconds(30),
       logGroup: apiLogGroup,
