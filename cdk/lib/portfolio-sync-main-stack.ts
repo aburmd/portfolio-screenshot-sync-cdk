@@ -254,6 +254,16 @@ def handler(event, context):
       sortKey: { name: "date", type: dynamodb.AttributeType.STRING },
     });
 
+    // Fidelity raw statements (audit trail)
+    const fidelityRawTable = new dynamodb.Table(this, "FidelityRawTable", {
+      tableName: `fidelity-raw-statements-${props.envName}`,
+      partitionKey: { name: "account_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "statement_month", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     const buyLotsTable = new dynamodb.Table(this, "BuyLotsTable", {
       tableName: `portfolio-buy-lots-${props.envName}`,
       partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
@@ -523,6 +533,9 @@ def handler(event, context):
     });
     new cdk.CfnOutput(this, "BuyLotsTableName", {
       value: buyLotsTable.tableName,
+    });
+    new cdk.CfnOutput(this, "FidelityRawTableName", {
+      value: fidelityRawTable.tableName,
     });
     new cdk.CfnOutput(this, "DailyPriceLambdaName", {
       value: dailyPriceLambda.functionName,
