@@ -272,6 +272,15 @@ def handler(event, context):
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    // Research: stock fundamentals (operating income, EPS, P/E by year)
+    const fundamentalsTable = new dynamodb.Table(this, "FundamentalsTable", {
+      tableName: `portfolio-fundamentals-${props.envName}`,
+      partitionKey: { name: "symbol", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "year", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // ==================== SQS + CLOUDWATCH ====================
 
     const dlq = new sqs.Queue(this, "OcrDLQ", {
@@ -402,6 +411,7 @@ def handler(event, context):
         TRANSACTIONS_TABLE: transactionsTable.tableName,
         DAILY_PRICES_TABLE: dailyPricesTable.tableName,
         BUY_LOTS_TABLE: buyLotsTable.tableName,
+        FUNDAMENTALS_TABLE: fundamentalsTable.tableName,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
         ENV: props.envName,
       },
@@ -416,6 +426,7 @@ def handler(event, context):
     transactionsTable.grantReadWriteData(apiLambda);
     dailyPricesTable.grantReadWriteData(apiLambda);
     buyLotsTable.grantReadWriteData(apiLambda);
+    fundamentalsTable.grantReadWriteData(apiLambda);
     apiLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
@@ -536,6 +547,9 @@ def handler(event, context):
     });
     new cdk.CfnOutput(this, "FidelityRawTableName", {
       value: fidelityRawTable.tableName,
+    });
+    new cdk.CfnOutput(this, "FundamentalsTableName", {
+      value: fundamentalsTable.tableName,
     });
     new cdk.CfnOutput(this, "DailyPriceLambdaName", {
       value: dailyPriceLambda.functionName,

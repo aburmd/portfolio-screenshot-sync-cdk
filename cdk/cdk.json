@@ -3,6 +3,6 @@
   "context": {
     "env": "dev",
     "lambdaArtifactKey": "lambda/ocr-processor-aa69dd2.zip",
-    "backendArtifactKey": "lambda/backend-api-13b0446.zip"
+    "backendArtifactKey": "lambda/backend-api-fc049a4.zip"
   }
 }
