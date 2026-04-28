@@ -408,7 +408,7 @@ def handler(event, context):
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: "screener.handler",
       code: dailyPriceCode,
-      memorySize: 512,
+      memorySize: 1024,
       timeout: cdk.Duration.minutes(5),
       logGroup: screenerLogGroup,
       environment: {
