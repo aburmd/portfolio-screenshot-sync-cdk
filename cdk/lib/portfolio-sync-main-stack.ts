@@ -281,6 +281,24 @@ def handler(event, context):
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    // Earnings Dip Screener results
+    const screenerTable = new dynamodb.Table(this, "ScreenerTable", {
+      tableName: `portfolio-screener-${props.envName}`,
+      partitionKey: { name: "market", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "symbol", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Index constituents (S&P 500, Nasdaq 100, Nifty 500)
+    const indexConstituentsTable = new dynamodb.Table(this, "IndexConstituentsTable", {
+      tableName: `portfolio-index-constituents-${props.envName}`,
+      partitionKey: { name: "index_name", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "symbol", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // ==================== SQS + CLOUDWATCH ====================
 
     const dlq = new sqs.Queue(this, "OcrDLQ", {
@@ -378,6 +396,57 @@ def handler(event, context):
       targets: [new targets.LambdaFunction(dailyPriceLambda)],
     });
 
+    // ==================== LAMBDA: EARNINGS SCREENER ====================
+    const screenerLogGroup = new logs.LogGroup(this, "ScreenerLogGroup", {
+      logGroupName: `/aws/lambda/portfolio-screener-${props.envName}`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    const screenerLambda = new lambda.Function(this, "ScreenerLambda", {
+      functionName: `portfolio-screener-${props.envName}`,
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: "screener.handler",
+      code: dailyPriceCode,
+      memorySize: 512,
+      timeout: cdk.Duration.minutes(5),
+      logGroup: screenerLogGroup,
+      environment: {
+        SCREENER_TABLE: screenerTable.tableName,
+        INDEX_CONSTITUENTS_TABLE: indexConstituentsTable.tableName,
+        FUNDAMENTALS_TABLE: fundamentalsTable.tableName,
+        ENV: props.envName,
+      },
+    });
+
+    screenerTable.grantReadWriteData(screenerLambda);
+    indexConstituentsTable.grantReadData(screenerLambda);
+    fundamentalsTable.grantReadWriteData(screenerLambda);
+    screenerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter"],
+        resources: ["arn:aws:ssm:us-east-1:654654547262:parameter/portfolio/api-credentials"],
+      })
+    );
+
+    // US market close: 4:30 PM EST = 9:30 PM UTC (Mon-Fri)
+    new events.Rule(this, "ScreenerUSSchedule", {
+      ruleName: `portfolio-screener-us-schedule-${props.envName}`,
+      schedule: events.Schedule.expression("cron(30 21 ? * MON-FRI *)"),
+      targets: [new targets.LambdaFunction(screenerLambda, {
+        event: events.RuleTargetInput.fromObject({ market: "US" }),
+      })],
+    });
+
+    // India market close: 4:00 PM IST = 10:30 AM UTC (Mon-Fri)
+    new events.Rule(this, "ScreenerINSchedule", {
+      ruleName: `portfolio-screener-in-schedule-${props.envName}`,
+      schedule: events.Schedule.expression("cron(30 10 ? * MON-FRI *)"),
+      targets: [new targets.LambdaFunction(screenerLambda, {
+        event: events.RuleTargetInput.fromObject({ market: "IN" }),
+      })],
+    });
+
     // ==================== LAMBDA: BACKEND API ====================
     // SAFETY: Same pattern — only update code when artifact key provided
     const apiCode = props.backendArtifactKey
@@ -412,6 +481,8 @@ def handler(event, context):
         DAILY_PRICES_TABLE: dailyPricesTable.tableName,
         BUY_LOTS_TABLE: buyLotsTable.tableName,
         FUNDAMENTALS_TABLE: fundamentalsTable.tableName,
+        SCREENER_TABLE: screenerTable.tableName,
+        INDEX_CONSTITUENTS_TABLE: indexConstituentsTable.tableName,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
         ENV: props.envName,
       },
@@ -427,6 +498,8 @@ def handler(event, context):
     dailyPricesTable.grantReadWriteData(apiLambda);
     buyLotsTable.grantReadWriteData(apiLambda);
     fundamentalsTable.grantReadWriteData(apiLambda);
+    screenerTable.grantReadWriteData(apiLambda);
+    indexConstituentsTable.grantReadWriteData(apiLambda);
     apiLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
@@ -437,6 +510,18 @@ def handler(event, context):
           "cognito-idp:AdminRemoveUserFromGroup",
         ],
         resources: ["*"],
+      })
+    );
+    apiLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter"],
+        resources: ["arn:aws:ssm:us-east-1:654654547262:parameter/portfolio/api-credentials"],
+      })
+    );
+    apiLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["lambda:InvokeFunction"],
+        resources: [screenerLambda.functionArn],
       })
     );
 
@@ -550,6 +635,12 @@ def handler(event, context):
     });
     new cdk.CfnOutput(this, "FundamentalsTableName", {
       value: fundamentalsTable.tableName,
+    });
+    new cdk.CfnOutput(this, "ScreenerTableName", {
+      value: screenerTable.tableName,
+    });
+    new cdk.CfnOutput(this, "IndexConstituentsTableName", {
+      value: indexConstituentsTable.tableName,
     });
     new cdk.CfnOutput(this, "DailyPriceLambdaName", {
       value: dailyPriceLambda.functionName,
