@@ -447,6 +447,49 @@ def handler(event, context):
       })],
     });
 
+    // ==================== LAMBDA: MA SCANNER ====================
+    const maScannerLogGroup = new logs.LogGroup(this, "MaScannerLogGroup", {
+      logGroupName: `/aws/lambda/portfolio-ma-scanner-${props.envName}`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    const maScannerLambda = new lambda.Function(this, "MaScannerLambda", {
+      functionName: `portfolio-ma-scanner-${props.envName}`,
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: "ma_scanner.handler",
+      code: dailyPriceCode,
+      memorySize: 1024,
+      timeout: cdk.Duration.minutes(5),
+      logGroup: maScannerLogGroup,
+      environment: {
+        SCREENER_TABLE: screenerTable.tableName,
+        INDEX_CONSTITUENTS_TABLE: indexConstituentsTable.tableName,
+        ENV: props.envName,
+      },
+    });
+
+    screenerTable.grantReadWriteData(maScannerLambda);
+    indexConstituentsTable.grantReadData(maScannerLambda);
+
+    // US: run after screener (10 PM UTC = 5 PM EST)
+    new events.Rule(this, "MaScannerUSSchedule", {
+      ruleName: `portfolio-ma-scanner-us-schedule-${props.envName}`,
+      schedule: events.Schedule.expression("cron(0 22 ? * MON-FRI *)"),
+      targets: [new targets.LambdaFunction(maScannerLambda, {
+        event: events.RuleTargetInput.fromObject({ market: "US" }),
+      })],
+    });
+
+    // India: run after screener (11 AM UTC = 4:30 PM IST)
+    new events.Rule(this, "MaScannerINSchedule", {
+      ruleName: `portfolio-ma-scanner-in-schedule-${props.envName}`,
+      schedule: events.Schedule.expression("cron(0 11 ? * MON-FRI *)"),
+      targets: [new targets.LambdaFunction(maScannerLambda, {
+        event: events.RuleTargetInput.fromObject({ market: "IN" }),
+      })],
+    });
+
     // ==================== LAMBDA: BACKEND API ====================
     // SAFETY: Same pattern — only update code when artifact key provided
     const apiCode = props.backendArtifactKey
@@ -521,7 +564,7 @@ def handler(event, context):
     apiLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["lambda:InvokeFunction"],
-        resources: [screenerLambda.functionArn],
+        resources: [screenerLambda.functionArn, maScannerLambda.functionArn],
       })
     );
 
