@@ -447,21 +447,22 @@ def handler(event, context):
       })],
     });
 
-    // ==================== LAMBDA: MA SCANNER ====================
-    const maScannerLogGroup = new logs.LogGroup(this, "MaScannerLogGroup", {
-      logGroupName: `/aws/lambda/portfolio-ma-scanner-${props.envName}`,
+    // ==================== LAMBDA: DAILY STOCK SCANNER ====================
+    // Replaces old MA Scanner. Stores ALL data (price, MAs, fundamentals) for all 1,100 stocks.
+    const dailyScannerLogGroup = new logs.LogGroup(this, "DailyScannerLogGroup", {
+      logGroupName: `/aws/lambda/portfolio-daily-scanner-${props.envName}`,
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    const maScannerLambda = new lambda.Function(this, "MaScannerLambda", {
-      functionName: `portfolio-ma-scanner-${props.envName}`,
+    const dailyScannerLambda = new lambda.Function(this, "DailyScannerLambda", {
+      functionName: `portfolio-daily-scanner-${props.envName}`,
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: "ma_scanner.handler",
+      handler: "daily_scanner.handler",
       code: dailyPriceCode,
       memorySize: 1024,
-      timeout: cdk.Duration.minutes(5),
-      logGroup: maScannerLogGroup,
+      timeout: cdk.Duration.minutes(10),
+      logGroup: dailyScannerLogGroup,
       environment: {
         SCREENER_TABLE: screenerTable.tableName,
         INDEX_CONSTITUENTS_TABLE: indexConstituentsTable.tableName,
@@ -469,23 +470,29 @@ def handler(event, context):
       },
     });
 
-    screenerTable.grantReadWriteData(maScannerLambda);
-    indexConstituentsTable.grantReadData(maScannerLambda);
+    screenerTable.grantReadWriteData(dailyScannerLambda);
+    indexConstituentsTable.grantReadWriteData(dailyScannerLambda);
+    dailyScannerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter"],
+        resources: ["arn:aws:ssm:us-east-1:654654547262:parameter/portfolio/api-credentials"],
+      })
+    );
 
-    // US: run after screener (10 PM UTC = 5 PM EST)
-    new events.Rule(this, "MaScannerUSSchedule", {
-      ruleName: `portfolio-ma-scanner-us-schedule-${props.envName}`,
-      schedule: events.Schedule.expression("cron(0 22 ? * MON-FRI *)"),
-      targets: [new targets.LambdaFunction(maScannerLambda, {
+    // US: 8 PM EST = 1:00 AM UTC (Tue-Sat, covers Mon-Fri market close)
+    new events.Rule(this, "DailyScannerUSSchedule", {
+      ruleName: `portfolio-daily-scanner-us-schedule-${props.envName}`,
+      schedule: events.Schedule.expression("cron(0 1 ? * TUE-SAT *)"),
+      targets: [new targets.LambdaFunction(dailyScannerLambda, {
         event: events.RuleTargetInput.fromObject({ market: "US" }),
       })],
     });
 
-    // India: run after screener (11 AM UTC = 4:30 PM IST)
-    new events.Rule(this, "MaScannerINSchedule", {
-      ruleName: `portfolio-ma-scanner-in-schedule-${props.envName}`,
-      schedule: events.Schedule.expression("cron(0 11 ? * MON-FRI *)"),
-      targets: [new targets.LambdaFunction(maScannerLambda, {
+    // India: 8 PM IST = 2:30 PM UTC (Mon-Fri)
+    new events.Rule(this, "DailyScannerINSchedule", {
+      ruleName: `portfolio-daily-scanner-in-schedule-${props.envName}`,
+      schedule: events.Schedule.expression("cron(30 14 ? * MON-FRI *)"),
+      targets: [new targets.LambdaFunction(dailyScannerLambda, {
         event: events.RuleTargetInput.fromObject({ market: "IN" }),
       })],
     });
@@ -564,7 +571,7 @@ def handler(event, context):
     apiLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["lambda:InvokeFunction"],
-        resources: [screenerLambda.functionArn, maScannerLambda.functionArn],
+        resources: [screenerLambda.functionArn, dailyScannerLambda.functionArn],
       })
     );
 
