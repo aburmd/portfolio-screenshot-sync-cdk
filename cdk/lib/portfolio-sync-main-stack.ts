@@ -429,23 +429,8 @@ def handler(event, context):
       })
     );
 
-    // US market close: 4:30 PM EST = 9:30 PM UTC (Mon-Fri)
-    new events.Rule(this, "ScreenerUSSchedule", {
-      ruleName: `portfolio-screener-us-schedule-${props.envName}`,
-      schedule: events.Schedule.expression("cron(30 21 ? * MON-FRI *)"),
-      targets: [new targets.LambdaFunction(screenerLambda, {
-        event: events.RuleTargetInput.fromObject({ market: "US" }),
-      })],
-    });
-
-    // India market close: 4:00 PM IST = 10:30 AM UTC (Mon-Fri)
-    new events.Rule(this, "ScreenerINSchedule", {
-      ruleName: `portfolio-screener-in-schedule-${props.envName}`,
-      schedule: events.Schedule.expression("cron(30 10 ? * MON-FRI *)"),
-      targets: [new targets.LambdaFunction(screenerLambda, {
-        event: events.RuleTargetInput.fromObject({ market: "IN" }),
-      })],
-    });
+    // NOTE: Earnings Screener schedules REMOVED — Daily Scanner handles earnings dates now.
+    // Screener Lambda kept for manual trigger only (refresh-indexes, etc.)
 
     // ==================== LAMBDA: DAILY STOCK SCANNER ====================
     // Replaces old MA Scanner. Stores ALL data (price, MAs, fundamentals) for all 1,100 stocks.
