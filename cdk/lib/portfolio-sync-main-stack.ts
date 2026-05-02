@@ -299,6 +299,16 @@ def handler(event, context):
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    // Stock OHLC history + AGG reference prices
+    const stockHistoryTable = new dynamodb.Table(this, "StockHistoryTable", {
+      tableName: `portfolio-stock-history-${props.envName}`,
+      partitionKey: { name: "market_symbol", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "date", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: "ttl",
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // ==================== SQS + CLOUDWATCH ====================
 
     const dlq = new sqs.Queue(this, "OcrDLQ", {
@@ -451,12 +461,14 @@ def handler(event, context):
       environment: {
         SCREENER_TABLE: screenerTable.tableName,
         INDEX_CONSTITUENTS_TABLE: indexConstituentsTable.tableName,
+        STOCK_HISTORY_TABLE: stockHistoryTable.tableName,
         ENV: props.envName,
       },
     });
 
     screenerTable.grantReadWriteData(dailyScannerLambda);
     indexConstituentsTable.grantReadWriteData(dailyScannerLambda);
+    stockHistoryTable.grantReadWriteData(dailyScannerLambda);
     dailyScannerLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["ssm:GetParameter"],
@@ -518,6 +530,7 @@ def handler(event, context):
         FUNDAMENTALS_TABLE: fundamentalsTable.tableName,
         SCREENER_TABLE: screenerTable.tableName,
         INDEX_CONSTITUENTS_TABLE: indexConstituentsTable.tableName,
+        STOCK_HISTORY_TABLE: stockHistoryTable.tableName,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
         ENV: props.envName,
       },
@@ -535,6 +548,7 @@ def handler(event, context):
     fundamentalsTable.grantReadWriteData(apiLambda);
     screenerTable.grantReadWriteData(apiLambda);
     indexConstituentsTable.grantReadWriteData(apiLambda);
+    stockHistoryTable.grantReadData(apiLambda);
     apiLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
