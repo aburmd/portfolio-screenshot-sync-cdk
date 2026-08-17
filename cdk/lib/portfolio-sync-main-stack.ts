@@ -569,6 +569,12 @@ def handler(event, context):
     );
     apiLambda.addToRolePolicy(
       new iam.PolicyStatement({
+        actions: ["ssm:GetParameter"],
+        resources: ["arn:aws:ssm:us-west-1:654654547262:parameter/portfolio-sync/alpaca-*"],
+      })
+    );
+    apiLambda.addToRolePolicy(
+      new iam.PolicyStatement({
         actions: ["lambda:InvokeFunction"],
         resources: [screenerLambda.functionArn, dailyScannerLambda.functionArn],
       })
