@@ -305,7 +305,25 @@ def handler(event, context):
       partitionKey: { name: "market_symbol", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "date", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      timeToLiveAttribute: "ttl",
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Position Plans: buy/sell zone plans per user per stock
+    const positionPlansTable = new dynamodb.Table(this, "PositionPlansTable", {
+      tableName: `portfolio-position-plans-${props.envName}`,
+      partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "market_symbol", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Saved Charts: cached zone charts per user per stock
+    const savedChartsTable = new dynamodb.Table(this, "SavedChartsTable", {
+      tableName: `portfolio-saved-charts-${props.envName}`,
+      partitionKey: { name: "user_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "market_symbol", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -531,6 +549,8 @@ def handler(event, context):
         SCREENER_TABLE: screenerTable.tableName,
         INDEX_CONSTITUENTS_TABLE: indexConstituentsTable.tableName,
         STOCK_HISTORY_TABLE: stockHistoryTable.tableName,
+        POSITION_PLANS_TABLE: positionPlansTable.tableName,
+        SAVED_CHARTS_TABLE: savedChartsTable.tableName,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
         ENV: props.envName,
       },
@@ -549,6 +569,8 @@ def handler(event, context):
     screenerTable.grantReadWriteData(apiLambda);
     indexConstituentsTable.grantReadWriteData(apiLambda);
     stockHistoryTable.grantReadData(apiLambda);
+    positionPlansTable.grantReadWriteData(apiLambda);
+    savedChartsTable.grantReadWriteData(apiLambda);
     apiLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
@@ -696,6 +718,12 @@ def handler(event, context):
     });
     new cdk.CfnOutput(this, "IndexConstituentsTableName", {
       value: indexConstituentsTable.tableName,
+    });
+    new cdk.CfnOutput(this, "PositionPlansTableName", {
+      value: positionPlansTable.tableName,
+    });
+    new cdk.CfnOutput(this, "SavedChartsTableName", {
+      value: savedChartsTable.tableName,
     });
     new cdk.CfnOutput(this, "DailyPriceLambdaName", {
       value: dailyPriceLambda.functionName,
